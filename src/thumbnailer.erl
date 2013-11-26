@@ -1,6 +1,6 @@
 -module(thumbnailer).
--include_lib("erlmedia/include/video_frame.hrl").
--include_lib("erlmedia/include/media_info.hrl").
+-include_lib("../include/video_frame_ff.hrl").
+-include_lib("../include/media_info.hrl").
 
 -export([start_link/1, jpeg/2, media_info/2]).
 -export([init/1, handle_call/3, handle_info/2, terminate/2]).
@@ -10,7 +10,7 @@ start_link(Options) ->
   gen_server:start_link(?MODULE, [Options], []).
 
 
-jpeg(Pid, #video_frame{flavor = keyframe, codec = h264} = F) ->
+jpeg(Pid, #video_frame_ff{flavor = keyframe, codec = h264} = F) ->
   gen_server:call(Pid, F, 10000).
 
 
@@ -74,10 +74,10 @@ handle_call(#media_info{streams = Streams}, _From, #thumb{config = OldConfig, po
       {reply, {error, no_video_stream}, T}
   end;
 
-handle_call(#video_frame{}, _From, #thumb{port = undefined} = T) ->
+handle_call(#video_frame_ff{}, _From, #thumb{port = undefined} = T) ->
   {reply, {error, not_configured_thumbnailer}, T};
 
-handle_call(#video_frame{codec = h264, flavor = keyframe, body = Body}, From, #thumb{port = Port, n = N, waiting = W} = T) ->
+handle_call(#video_frame_ff{codec = h264, flavor = keyframe, body = Body}, From, #thumb{port = Port, n = N, waiting = W} = T) ->
   erlang:port_command(Port, erlang:term_to_binary({jpeg,N,Body})),
   {noreply, T#thumb{waiting = [{N,From}|W], n = N+1}}.
 

@@ -65,6 +65,7 @@ int main(int argc, char *argv[]) {
   } else {
     loop();
   }
+  return 0;
 }
 
 
@@ -268,10 +269,9 @@ void loop() {
       continue;
     }
 
-    if(!strcmp(command, "video_frame")) {
+    if(!strcmp(command, "video_frame_ff")) {
       idx = command_idx;
       struct video_frame *fr = read_video_frame(buf, &idx);
-
       AVPacket packet;
       av_new_packet(&packet, fr->body.size);
       memcpy(packet.data, fr->body.data, fr->body.size);
@@ -289,7 +289,22 @@ void loop() {
         int got_output = 0;
         int ret = avcodec_decode_audio4(input_audio.ctx, decoded_frame, &got_output, &packet);
         if(got_output) {
-          reply_atom("ok");
+          AVPacket pkt;
+          av_init_packet(&pkt);
+          pkt.data = NULL;
+          pkt.size = 0;
+
+          int got_packet_ptr = 0;
+          decoded_frame->pts = av_frame_get_best_effort_timestamp(decoded_frame);     //What is it?
+          av_log(NULL, AV_LOG_ERROR, "Time-base %d %d\n", (*input_audio.ctx).time_base.num, (*input_audio.ctx).time_base.den);        //DEBUG
+          av_log(NULL, AV_LOG_ERROR, "Pts %ld\n", (*decoded_frame).pts);                          //DEBUG
+          if(out_audio_count <= 0) error("trying to transcode uninitialized audio");
+
+          if(avcodec_encode_audio2(output_audio[0].ctx, &pkt, decoded_frame, &got_packet_ptr) != 0)
+                      error("Failed to encode aac");
+          av_log(NULL, AV_LOG_ERROR, "New pts %ld\n", pkt.pts);
+          reply_avframe(&pkt, output_audio[0].codec);
+          //reply_atom("ok");
         } else {
           error("Got: %d, %d\r\n", ret, got_output);
         }

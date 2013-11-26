@@ -26,8 +26,8 @@
 
 -export([init/1, handle_info/2, terminate/2, update_options/2]).
 
--include_lib("erlmedia/include/video_frame.hrl").
--include_lib("erlmedia/include/media_info.hrl").
+-include_lib("../include/video_frame_ff.hrl").
+-include_lib("../include/media_info.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include("log.hrl").
 
@@ -52,13 +52,13 @@ set_media_info(#media_info{} = MI, #mbr{} = MBR) ->
   MBR#mbr{media_info = MI}.
 
 
-handle_info(#video_frame{}, #mbr{media_info = undefined} = State) ->
+handle_info(#video_frame_ff{}, #mbr{media_info = undefined} = State) ->
   {noreply, State};
 
 handle_info(#media_info{} = MI, #mbr{} = MBR) ->
   {noreply, set_media_info(MI, MBR)};
 
-handle_info(#video_frame{} = _Frame, #mbr{} = MBR) ->
+handle_info(#video_frame_ff{} = _Frame, #mbr{} = MBR) ->
   {noreply, MBR}.
 
 

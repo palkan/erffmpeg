@@ -142,7 +142,7 @@ struct video_frame* read_video_frame(char *buf, int *idx) {
   int arity=-1;
   if(ei_decode_tuple_header(buf, idx, &arity) < 0) return NULL;
   if(ei_decode_atom(buf, idx, header) < 0) return NULL;
-  if(strcmp(header,"video_frame")) return NULL;
+  if(strcmp(header,"video_frame_ff")) return NULL;
   // Now need to jump through the message to calculate total memory
   int idx1 = *idx;
   ei_skip_term(buf,&idx1);
@@ -164,13 +164,13 @@ struct video_frame* read_video_frame(char *buf, int *idx) {
   // Unpack all fields
   r->content = read_frame_content(buf,idx);
   if(!r->content) {free(r); return NULL;}
-  if(ei_decode_double(buf,idx,&r->dts) < 0) {
+  if(ei_decode_long(buf,idx,&r->dts) < 0) {
      ei_skip_term(buf,idx);
-     r->dts = 0.000;
+     r->dts = 0;
   }
-  if(ei_decode_double(buf,idx,&r->pts) < 0) {
+  if(ei_decode_long(buf,idx,&r->pts) < 0) {
      ei_skip_term(buf,idx);
-     r->pts = 0.000;
+     r->pts = 0;
   }
   if(ei_decode_long(buf,idx,&r->stream_id) < 0) {
      ei_skip_term(buf,idx);
@@ -198,14 +198,14 @@ struct video_frame* read_video_frame(char *buf, int *idx) {
 
 int write_video_frame(ei_x_buff* x, struct video_frame r) {
   ei_x_encode_tuple_header(x, 10);
-  ei_x_encode_atom(x, "video_frame");
+  ei_x_encode_atom(x, "video_frame_ff");
   write_frame_content(x,r.content);
-  ei_x_encode_double(x, r.dts);
-  ei_x_encode_double(x, r.pts);
-  ei_x_encode_double(x, r.stream_id);
+  ei_x_encode_long(x, r.dts);
+  ei_x_encode_long(x, r.pts);
+  ei_x_encode_long(x, r.stream_id);
   write_frame_codec(x,r.codec);
   write_frame_flavor(x,r.flavor);
-  ei_x_encode_double(x, r.track_id);
+  ei_x_encode_long(x, r.track_id);
   ei_x_encode_binary(x, r.body.data, r.body.size);
   ei_x_encode_atom(x, "undefined");
   return 0;

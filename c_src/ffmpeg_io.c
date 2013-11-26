@@ -35,8 +35,8 @@ void reply_avframe(AVPacket *pkt, AVCodec *codec) {
   r.content = codec->type == AVMEDIA_TYPE_VIDEO ? frame_content_video :
     codec->type == AVMEDIA_TYPE_AUDIO ? frame_content_audio : 0;
 
-  r.dts = pkt->dts / 90.0;
-  r.pts = pkt->pts / 90.0;
+  r.dts = pkt->dts / 90;
+  r.pts = pkt->pts / 90;
   r.stream_id = 0;
   r.codec = codec->id == AV_CODEC_ID_H264 ? frame_codec_h264 :
     codec->id == AV_CODEC_ID_AAC ? frame_codec_aac : 0;

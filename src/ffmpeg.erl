@@ -24,7 +24,8 @@
 -module(ffmpeg).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("erlmedia/include/video_frame.hrl").
--include_lib("erlmedia/include/media_info.hrl").
+-include("../include/video_frame_ff.hrl").
+-include("../include/media_info.hrl").
 -include("log.hrl").
 
 -type(output_option() :: 
@@ -50,7 +51,7 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_info/2, terminate/2]).
 
--export([start_worker/0, start_worker/1, send/2, fetch/1, fetch/2, close/1]).
+-export([start_worker/0, start_worker/1, send/2, send_audio/2, fetch/1, fetch/2, close/1, init_audio/2]).
 -export([init_decoder/2, send_frame/2]).
 -export([init_encoder/2]).
 
@@ -87,18 +88,30 @@ send({program, Port}, Term) ->
   ok.
 
 
-send_frame(_Worker, #video_frame{flavor = config}) ->
+send_frame(_Worker, #video_frame_ff{flavor = config}) ->
   {error, config_forbidden};
 
 % send_frame(Worker, #video_frame{codec = h264, flavor = Flavor, body = Body} = Frame) ->
 %   send(Worker, Frame)
 
-send_frame(Worker, #video_frame{} = Frame) ->
+send_frame(Worker, #video_frame_ff{} = Frame) ->
   send(Worker, Frame),
   Reply = fetch(Worker),
   Reply.
 
+send_audio(Worker, #video_frame{sound = {_, _, Rate}} = Frame) ->
+  ?D({rate, Rate}),
+  send_frame(Worker, frame_to_frame_ff(Frame)).
 
+init_audio(Worker, Codec) ->
+  send(Worker, #init_input{content = audio, codec = Codec}),
+  case fetch(Worker) of
+    ready ->
+      send(Worker, #init_output{content = audio, codec = libfaac, track_id = 1, options = [{bitrate, 16000}, {sample_rate, 44100}, {channels, 2}]}),
+      fetch(Worker);
+    Else ->
+      Else
+  end.
 
 init_decoder(Port, #media_info{streams = Streams}) ->
   [begin
@@ -131,7 +144,7 @@ init_encoder(Port, #media_info{streams = Streams}) ->
     send(Port, #init_output{content = Content, codec = Codec, track_id = TrackId, options = Options}),
     case fetch(Port) of
       ready -> [];
-      #video_frame{} = F -> [F];
+      #video_frame_ff{} = F -> [F];
       Else -> error({init_output,Codec,TrackId,Else})
     end
   end, Streams1),
@@ -159,26 +172,28 @@ fetch({program, Port}, Timeout) ->
   end.
 
 
-transform_reply(#video_frame{codec = Codec} = Frame) ->
-  transform_frame(Frame#video_frame{codec = av_to_ev(Codec)});
+transform_reply(#video_frame_ff{codec = Codec} = Frame) ->
+  transform_frame(Frame#video_frame_ff{codec = av_to_ev(Codec)});
 transform_reply(A) ->
   A.
 
 
-transform_frame(#video_frame{codec = h264, body = Body, flavor = config} = Reply) ->
+transform_frame(#video_frame_ff{codec = h264, body = Body, flavor = config} = Reply) ->
   NALs = [NAL || NAL <- binary:split(Body, [<<1:32>>, <<1:24>>], [global]), size(NAL) > 0],
   H264 = lists:foldl(fun(NAL, H_) -> {H1_,_} = h264:decode_nal(NAL, H_), H1_ end, h264:init(), NALs),
   % ?debugFmt("<  config ~p", [Reply#video_frame.dts]),
-  Reply#video_frame{body = h264:decoder_config(H264)};
-transform_frame(#video_frame{codec = h264, body = Annexb} = Reply) ->
+  Reply#video_frame_ff{body = h264:decoder_config(H264)};
+transform_frame(#video_frame_ff{codec = h264, body = Annexb} = Reply) ->
   NALs = [NAL || NAL <- binary:split(Annexb, [<<1:32>>, <<1:24>>], [global]), size(NAL) > 0],
   Body = iolist_to_binary([[<<(size(NAL)):32>>, NAL] || NAL <- NALs]),
   % ?debugFmt("<~8s ~p ~p ~p", [Reply#video_frame.flavor, Reply#video_frame.dts, Reply#video_frame.pts,
   %   [{h264:type(NAL), size(NAL)} || NAL <- NALs]       ]),
-  Reply#video_frame{body = Body};
-transform_frame(#video_frame{} = Frame) ->
+  Reply#video_frame_ff{body = Body};
+transform_frame(#video_frame_ff{} = Frame) ->
   Frame.
 
+frame_to_frame_ff(#video_frame{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}) ->
+  #video_frame_ff{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}.
 
 -record(ffmpeg, {
   port

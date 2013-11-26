@@ -30,8 +30,8 @@ int write_frame_sound_rate(ei_x_buff *x, enum frame_sound_rate t);
 
 struct video_frame{
   enum frame_content content;
-  double dts;
-  double pts;
+  long dts;
+  long pts;
   long stream_id;
   enum frame_codec codec;
   enum frame_flavor flavor;

@@ -1,9 +1,10 @@
 #include <sys/socket.h>
+#include <sys/resource.h>
 #include <arpa/inet.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
 #include <stdio.h>
-#include <strings.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 
