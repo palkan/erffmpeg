@@ -4,11 +4,12 @@
 -include_lib("erlmedia/include/video_frame.hrl").
 -include("../include/video_frame_ff.hrl").
 -include("../include/ffmpeg_worker.hrl").
+-include("log.hrl").
 
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, cast_frame/2, init_ffmpeg/4]).
+-export([start_link/1, init_ffmpeg/4, transcode/2]).
 
 %% gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -30,64 +31,15 @@ send({program, Port}, Term) ->
 
 send_frame(#video_frame{content = audio} = Frame, #ffmpeg_worker{port = Port, audio_output = Output} = State) ->
   send(Port, transform_frame(Frame)),
-  Reply  = case fetch(Port) of
+  case fetch(Port) of
+    #video_frame_ff{body = <<>>} ->
+      {noreply, State};
     #video_frame_ff{} = NewFrame ->
-      transform_frame(NewFrame, Output);
+      {reply, {accumulate, transform_frame(NewFrame, Output)}, State};
     Else ->
-      {error, Else}
-  end,
-  {Reply, State}.
+      {reply, Else, State}
+  end.
 
-%% gen_server callbacks
-
-init(Options) ->
-  Port = start_worker(),
-  Owner = proplists:get_value(owner, Options),
-  Bitrate = proplists:get_value(bitrate, Options),
-  Sample_rate = proplists:get_value(sample_rate, Options),
-  Channels = proplists:get_value(channels, Options),
-  {ok, #ffmpeg_worker{owner = Owner, port = Port, audio_output = #init_output{options = [{bitrate, Bitrate}, {sample_rate, Sample_rate}, {channels, Channels}]}}}.
-
-handle_call(_Request, _From, State) ->
-  {noreply, State}.
-
-handle_cast(#video_frame{} = Frame, State) ->
-  response_to_owner(send_frame(Frame, State));
-
-handle_cast({init, audio, Codec, Config}, #ffmpeg_worker{port = Port, audio_output = Output} = State) ->
-  Input = #init_input{content = audio, codec = ev_to_av(Codec), config = Config},
-  response_to_owner({send_init(Port, Input, Output), State#ffmpeg_worker{audio_input = Input}});
-
-handle_cast({init, video, Codec, Config}, #ffmpeg_worker{port = Port, video_output = Output} = State) ->
-  Input = #init_input{content = video, codec = ev_to_av(Codec), config = Config},
-  response_to_owner({send_init(Port, Input, Output), State#ffmpeg_worker{audio_input = Input}});
-
-handle_cast(_Request, State) ->
-  {noreply, State}.
-
-handle_info(_Info, State) ->
-  {noreply, State}.
-
-terminate(_Reason, _State) ->
-  ok.
-
-code_change(_OldVsn, State, _Extra) ->
-  {ok, State}.
-
-cast_frame(Pid, Frame) ->
-  gen_server:cast(Pid, Frame).
-
-init_ffmpeg(Pid, Content, Codec, Config) ->
-  gen_server:cast(Pid, {init, Content, Codec, Config}).
-
-transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = keyframe, body = Body, next_id = Next_id}, #init_output{options = Options}) ->
-  Bitrate = proplists:get_value(bitrate, Options),
-  Sample_rate = proplists:get_value(sample_rate, Options),
-  Channels = proplists:get_value(channels, Options),
-  #video_frame{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = frame, sound = {Channels, av_to_ev(Bitrate), av_to_ev(Sample_rate)}, body = Body, next_id = Next_id}.
-
-transform_frame(#video_frame{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}) ->
-  #video_frame_ff{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}.
 
 send_init(Port, Input, Output) ->
   send(Port, Input),
@@ -104,8 +56,75 @@ send_init(Port, Input, Output) ->
       {error, Else}
   end.
 
-response_to_owner({Term, #ffmpeg_worker{owner = Owner} = State}) ->
+%% gen_server callbacks
+
+init(Options) ->
+  Port = start_worker(),
+  Bitrate = proplists:get_value(bitrate, Options),
+  Sample_rate = proplists:get_value(sample_rate, Options),
+  Channels = proplists:get_value(channels, Options),
+  {ok, #ffmpeg_worker{port = Port, audio_output = #init_output{content = audio, codec = libfaac, track_id = 2, options = [{bitrate, Bitrate}, {sample_rate, Sample_rate}, {channels, Channels}]}}}.
+
+handle_call({init, audio, Codec, Config}, {Pid, _Ref}, #ffmpeg_worker{owner = undefined, port = Port, audio_output = Output} = State) ->
+  Input = #init_input{content = audio, codec = ev_to_av(Codec), config = Config},
+  {reply, send_init(Port, Input, Output), State#ffmpeg_worker{owner = Pid, audio_input = Input}};
+
+handle_call({init, audio, Codec, Config}, _From, #ffmpeg_worker{port = Port, audio_output = Output} = State) ->
+  Input = #init_input{content = audio, codec = ev_to_av(Codec), config = Config},
+  {reply, send_init(Port, Input, Output), State#ffmpeg_worker{audio_input = Input}};
+
+handle_call({init, video, Codec, Config}, {Pid, _Ref}, #ffmpeg_worker{owner = undefined, port = Port, video_output = Output} = State) ->
+  Input = #init_input{content = video, codec = ev_to_av(Codec), config = Config},
+  {reply, send_init(Port, Input, Output), State#ffmpeg_worker{owner = Pid, video_input = Input}};
+
+handle_call({init, video, Codec, Config}, _From, #ffmpeg_worker{port = Port, video_output = Output} = State) ->
+  Input = #init_input{content = video, codec = ev_to_av(Codec), config = Config},
+  {reply, send_init(Port, Input, Output), State#ffmpeg_worker{video_input = Input}};
+
+handle_call(_Request, _From, State) ->
+  {noreply, State}.
+
+handle_cast({transcode, #video_frame{} = Frame}, State) ->
+  response_to_owner(send_frame(Frame, State));
+
+handle_cast(_Request, State) ->
+  {noreply, State}.
+
+handle_info(_Info, State) ->
+  {noreply, State}.
+
+terminate(_Reason, _State) ->
+  ok.
+
+code_change(_OldVsn, State, _Extra) ->
+  {ok, State}.
+
+init_ffmpeg(Pid, Content, Codec, Config) ->
+  gen_server:call(Pid, {init, Content, Codec, Config}).
+
+transcode(Pid, Frame) ->
+  gen_server:cast(Pid, {transcode, Frame}).
+
+transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = keyframe, body = Body, next_id = Next_id}, #init_output{options = Options}) ->
+  Bitrate = proplists:get_value(bitrate, Options),
+  Sample_rate = proplists:get_value(sample_rate, Options),
+  Channels = proplists:get_value(channels, Options),
+  #video_frame{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = frame, sound = {Channels, av_to_ev(Bitrate), av_to_ev(Sample_rate)}, body = Body, next_id = Next_id};
+
+transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = config, body = Body, next_id = Next_id}, #init_output{options = Options}) ->
+  Bitrate = proplists:get_value(bitrate, Options),
+  Sample_rate = proplists:get_value(sample_rate, Options),
+  Channels = proplists:get_value(channels, Options),
+  #video_frame{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = config, sound = {Channels, av_to_ev(Bitrate), av_to_ev(Sample_rate)}, body = Body, next_id = Next_id}.
+
+transform_frame(#video_frame{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}) ->
+  #video_frame_ff{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}.
+
+response_to_owner({reply, Term, #ffmpeg_worker{owner = Owner} = State}) ->
   gen_server:cast(Owner, Term),
+  {noreply, State};
+
+response_to_owner({noreply, State}) ->
   {noreply, State}.
 
 fetch(Port) ->

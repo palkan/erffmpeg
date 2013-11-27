@@ -296,13 +296,12 @@ void loop() {
 
           int got_packet_ptr = 0;
           decoded_frame->pts = av_frame_get_best_effort_timestamp(decoded_frame);     //What is it?
-          av_log(NULL, AV_LOG_ERROR, "Time-base %d %d\n", (*input_audio.ctx).time_base.num, (*input_audio.ctx).time_base.den);        //DEBUG
-          av_log(NULL, AV_LOG_ERROR, "Pts %ld\n", (*decoded_frame).pts);                          //DEBUG
+          // av_log(NULL, AV_LOG_ERROR, "Pts %ld\n", (*decoded_frame).pts);                          //DEBUG
           if(out_audio_count <= 0) error("trying to transcode uninitialized audio");
 
           if(avcodec_encode_audio2(output_audio[0].ctx, &pkt, decoded_frame, &got_packet_ptr) != 0)
                       error("Failed to encode aac");
-          av_log(NULL, AV_LOG_ERROR, "New pts %ld\n", pkt.pts);
+          //av_log(NULL, AV_LOG_ERROR, "New pts %ld\n", pkt.pts);
           reply_avframe(&pkt, output_audio[0].codec);
           //reply_atom("ok");
         } else {
