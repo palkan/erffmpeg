@@ -9,7 +9,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, init_ffmpeg/4, transcode/2]).
+-export([start_link/1, init_ffmpeg/4, transcode/3]).
 
 %% gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -29,13 +29,14 @@ start_worker(Path) ->
 send({program, Port}, Term) ->
   erlang:port_command(Port, erlang:term_to_binary(Term)).
 
-send_frame(#video_frame{content = audio} = Frame, #ffmpeg_worker{port = Port, audio_output = Output} = State) ->
+send_frame(#video_frame{content = audio} = Frame, #ffmpeg_worker{port = Port, audio_output = Output, numbers = Numbers} = State) ->
   send(Port, transform_frame(Frame)),
   case fetch(Port) of
     #video_frame_ff{body = <<>>} ->
       {noreply, State};
     #video_frame_ff{} = NewFrame ->
-      {reply, {accumulate, transform_frame(NewFrame, Output)}, State};
+      {Number, NextNumbers} = get_first(Numbers),
+      {reply, {accumulate_ffmpeg, transform_frame(NewFrame, Output), Number}, State#ffmpeg_worker{numbers = NextNumbers}};
     Else ->
       {reply, Else, State}
   end.
@@ -84,8 +85,8 @@ handle_call({init, video, Codec, Config}, _From, #ffmpeg_worker{port = Port, vid
 handle_call(_Request, _From, State) ->
   {noreply, State}.
 
-handle_cast({transcode, #video_frame{} = Frame}, State) ->
-  response_to_owner(send_frame(Frame, State));
+handle_cast({transcode, #video_frame{} = Frame, Number}, #ffmpeg_worker{numbers = Numbers} = State) ->
+  response_to_owner(send_frame(Frame, State#ffmpeg_worker{numbers = [Number|Numbers]}));
 
 handle_cast(_Request, State) ->
   {noreply, State}.
@@ -102,8 +103,8 @@ code_change(_OldVsn, State, _Extra) ->
 init_ffmpeg(Pid, Content, Codec, Config) ->
   gen_server:call(Pid, {init, Content, Codec, Config}).
 
-transcode(Pid, Frame) ->
-  gen_server:cast(Pid, {transcode, Frame}).
+transcode(Pid, Frame, Number) ->
+  gen_server:cast(Pid, {transcode, Frame, Number}).
 
 transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = keyframe, body = Body, next_id = Next_id}, #init_output{options = Options}) ->
   Bitrate = proplists:get_value(bitrate, Options),
@@ -139,6 +140,10 @@ fetch({program, Port}, Timeout) ->
   after Timeout ->
     {error, timeout}
   end.
+
+get_first(List) ->
+  [First|RList] = lists:reverse(List),
+  {First, lists:reverse(RList)}.
 
 ev_to_av(h264) -> libx264;
 ev_to_av(aac) -> libfaac;

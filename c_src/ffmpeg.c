@@ -144,6 +144,7 @@ void loop() {
       if(!t->codec || !t->ctx) 
         error("Unknown %s decoder '%s'", content, codec);
       t->ctx->time_base = (AVRational){1, 90};
+      t->ctx->channels = 1;
       t->ctx->extradata_size = decoder_config_len;
       t->ctx->extradata = decoder_config;
       if(avcodec_open2(t->ctx, t->codec, NULL) < 0) 
