@@ -32,12 +32,13 @@ send({program, Port}, Term) ->
 send_frame(#video_frame{content = audio} = Frame, #ffmpeg_worker{port = Port, audio_output = Output, numbers = Numbers} = State) ->
   send(Port, transform_frame(Frame)),
   case fetch(Port) of
-    #video_frame_ff{body = <<>>} ->
+    empty ->
       {noreply, State};
     #video_frame_ff{} = NewFrame ->
       {Number, NextNumbers} = get_first(Numbers),
       {reply, {accumulate_ffmpeg, transform_frame(NewFrame, Output), Number}, State#ffmpeg_worker{numbers = NextNumbers}};
     Else ->
+      ?D(Else),
       {reply, Else, State}
   end.
 
@@ -110,13 +111,13 @@ transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = C
   Bitrate = proplists:get_value(bitrate, Options),
   Sample_rate = proplists:get_value(sample_rate, Options),
   Channels = proplists:get_value(channels, Options),
-  #video_frame{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = frame, sound = {Channels, av_to_ev(Bitrate), av_to_ev(Sample_rate)}, body = Body, next_id = Next_id};
+  #video_frame{content = audio, pts = trunc(Pts), dts = trunc(Dts), codec = Codec, stream_id = Stream_id, flavor = frame, sound = {Channels, av_to_ev(Bitrate), av_to_ev(Sample_rate)}, body = Body, next_id = Next_id};
 
 transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = config, body = Body, next_id = Next_id}, #init_output{options = Options}) ->
   Bitrate = proplists:get_value(bitrate, Options),
   Sample_rate = proplists:get_value(sample_rate, Options),
   Channels = proplists:get_value(channels, Options),
-  #video_frame{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = config, sound = {Channels, av_to_ev(Bitrate), av_to_ev(Sample_rate)}, body = Body, next_id = Next_id}.
+  #video_frame{content = audio, pts = trunc(Pts), dts = trunc(Dts), codec = Codec, stream_id = Stream_id, flavor = config, sound = {Channels, av_to_ev(Bitrate), av_to_ev(Sample_rate)}, body = Body, next_id = Next_id}.
 
 transform_frame(#video_frame{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}) ->
   #video_frame_ff{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}.
