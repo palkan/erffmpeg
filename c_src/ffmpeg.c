@@ -35,6 +35,7 @@ Track input_audio;
 Track input_video;
 Track output_audio[MAX_OUTPUT_TRACKS];
 int out_audio_count = 0;
+int out_samples_count = 0;
 SwrContext *swr;
 Track output_video[MAX_OUTPUT_TRACKS];
 int out_video_count = 0;
@@ -308,7 +309,8 @@ void loop() {
         if(got_output) {
           if (swr != NULL)
           {
-            int out_nb_samples = av_rescale_rnd(decoded_frame->nb_samples, output_audio[0].ctx->sample_rate, input_audio.ctx->sample_rate, AV_ROUND_UP);
+            int out_nb_samples; //= av_rescale_rnd(decoded_frame->nb_samples, output_audio[0].ctx->sample_rate, input_audio.ctx->sample_rate, AV_ROUND_UP);
+            out_nb_samples = av_rescale_rnd(swr_get_delay(swr, output_audio[0].ctx->sample_rate) + decoded_frame->nb_samples, output_audio[0].ctx->sample_rate, output_audio[0].ctx->sample_rate, AV_ROUND_UP);
             if (out_nb_samples > output_audio[0].ctx->frame_size)
                out_nb_samples = output_audio[0].ctx->frame_size;
             uint8_t **out_buffer;
@@ -319,7 +321,9 @@ void loop() {
             av_frame_free(&decoded_frame);
             decoded_frame = avcodec_alloc_frame();
             decoded_frame->nb_samples = out_nb_samples;
+            decoded_frame->pts = av_rescale_q(out_samples_count, (AVRational){1, output_audio[0].ctx->sample_rate}, output_audio[0].ctx->time_base);
             avcodec_fill_audio_frame(decoded_frame, output_audio[0].ctx->channels, output_audio[0].ctx->sample_fmt, out_buffer[0], out_samples_size, 0);
+            out_samples_count += out_nb_samples;
           }
           AVPacket pkt;
           av_init_packet(&pkt);
