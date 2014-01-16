@@ -274,7 +274,6 @@ void loop() {
     }
 
     if(!strcmp(command, "video_frame_ff")) {
-    fprintf(stderr, "chpok\n");
       idx = command_idx;
       struct video_frame *fr = read_video_frame(buf, &idx);
       AVPacket packet;
@@ -310,13 +309,17 @@ void loop() {
           if (swr != NULL)
           {
             int out_nb_samples = av_rescale_rnd(decoded_frame->nb_samples, output_audio[0].ctx->sample_rate, input_audio.ctx->sample_rate, AV_ROUND_UP);
-            uint8_t *output_buffer;
-            int buf_size;
-            av_samples_alloc_array_and_samples(&output_buffer, &buf_size, output_audio[0].ctx->channels, out_nb_samples, output_audio[0].ctx->sample_fmt, 0);
-            swr_convert(swr, &output_buffer, out_nb_samples, decoded_frame->data, decoded_frame->nb_samples);
-            //av_frame_free(&decoded_frame);
-            //decoded_frame = avcodec_alloc_frame();
-            //avcodec_fill_audio_frame(decoded_frame, out_nb_samples, output_audio[0].ctx->sample_fmt, output_buffer, buf_size, 0);
+            if (out_nb_samples > output_audio[0].ctx->frame_size)
+               out_nb_samples = output_audio[0].ctx->frame_size;
+            uint8_t **out_buffer;
+            int buf_size, out_samples_size;
+            out_samples_size = av_samples_get_buffer_size(NULL, output_audio[0].ctx->channels, out_nb_samples, output_audio[0].ctx->sample_fmt, 0);
+            av_samples_alloc_array_and_samples(&out_buffer, &buf_size, output_audio[0].ctx->channels, out_nb_samples, output_audio[0].ctx->sample_fmt, 0);
+            swr_convert(swr, out_buffer, out_nb_samples, (const uint8_t **)decoded_frame->data, decoded_frame->nb_samples);
+            av_frame_free(&decoded_frame);
+            decoded_frame = avcodec_alloc_frame();
+            decoded_frame->nb_samples = out_nb_samples;
+            avcodec_fill_audio_frame(decoded_frame, output_audio[0].ctx->channels, output_audio[0].ctx->sample_fmt, out_buffer[0], out_samples_size, 0);
           }
           AVPacket pkt;
           av_init_packet(&pkt);
@@ -337,6 +340,7 @@ void loop() {
         } else {
           error("Got: %d, %d\r\n", ret, got_output);
         }
+        av_frame_free(&decoded_frame);
         free(fr);
         continue;
       }
