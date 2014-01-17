@@ -14,6 +14,7 @@
 
 #include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
+#include <libavutil/opt.h>
 #include "reader.h"
 #include "compat.h"
 
@@ -36,6 +37,7 @@ Track input_video;
 Track output_audio[MAX_OUTPUT_TRACKS];
 int out_audio_count = 0;
 int out_samples_count = 0;
+int pts_start = 0;
 SwrContext *swr;
 Track output_video[MAX_OUTPUT_TRACKS];
 int out_video_count = 0;
@@ -141,12 +143,12 @@ void loop() {
         error("Unknown media content: '%s'", content);
       }
       if(t->codec) error("Double initialization of media '%s'", content);
-
+      fprintf(stderr, "coedc %s\n", codec);
       t->codec = avcodec_find_decoder_by_name(codec);
       t->ctx = avcodec_alloc_context3(t->codec);
       if(!t->codec || !t->ctx) 
         error("Unknown %s decoder '%s'", content, codec);
-      t->ctx->time_base = (AVRational){1, 90};
+      t->ctx->time_base = (AVRational){1, 90000};
       t->ctx->channels = 1;
       t->ctx->extradata_size = decoder_config_len;
       t->ctx->extradata = decoder_config;
@@ -261,7 +263,7 @@ void loop() {
         ctx->profile = FF_PROFILE_AAC_MAIN;
       }
       ctx->flags |= CODEC_FLAG_GLOBAL_HEADER;
-      ctx->time_base = (AVRational){1,90};
+      ctx->time_base = (AVRational){1,90000};
       if(avcodec_open2(ctx, t->codec, &opts) < 0) error("failed to allocate video encoder");
 
       AVPacket config;
@@ -284,7 +286,7 @@ void loop() {
       packet.dts = fr->dts*90;
       packet.pts = fr->pts*90;
       packet.stream_index = fr->track_id;
-
+      //fprintf(stderr, "in_pts %d\n", fr->pts);
       // if(packet_size != pkt_size) error("internal error in reading frame body");
 
       if(fr->content == frame_content_audio) {
@@ -301,15 +303,15 @@ void loop() {
             av_opt_set_sample_fmt(swr, "in_sample_fmt",  input_audio.ctx->sample_fmt, 0);
             av_opt_set_sample_fmt(swr, "out_sample_fmt", output_audio[0].ctx->sample_fmt,  0);
             swr_init(swr);
+            pts_start = packet.pts;
         }
-        AVFrame *decoded_frame = avcodec_alloc_frame();
+        AVFrame *decoded_frame = av_frame_alloc();
         int got_output = 0;
         int ret = avcodec_decode_audio4(input_audio.ctx, decoded_frame, &got_output, &packet);
 
         if(got_output) {
-          if (swr != NULL)
-          {
-            int out_nb_samples; //= av_rescale_rnd(decoded_frame->nb_samples, output_audio[0].ctx->sample_rate, input_audio.ctx->sample_rate, AV_ROUND_UP);
+          if (swr != NULL) {
+            int out_nb_samples;
             out_nb_samples = av_rescale_rnd(swr_get_delay(swr, output_audio[0].ctx->sample_rate) + decoded_frame->nb_samples, output_audio[0].ctx->sample_rate, output_audio[0].ctx->sample_rate, AV_ROUND_UP);
             if (out_nb_samples > output_audio[0].ctx->frame_size)
                out_nb_samples = output_audio[0].ctx->frame_size;
@@ -319,24 +321,27 @@ void loop() {
             av_samples_alloc_array_and_samples(&out_buffer, &buf_size, output_audio[0].ctx->channels, out_nb_samples, output_audio[0].ctx->sample_fmt, 0);
             swr_convert(swr, out_buffer, out_nb_samples, (const uint8_t **)decoded_frame->data, decoded_frame->nb_samples);
             av_frame_free(&decoded_frame);
-            decoded_frame = avcodec_alloc_frame();
+            decoded_frame = av_frame_alloc();
             decoded_frame->nb_samples = out_nb_samples;
-            decoded_frame->pts = av_rescale_q(out_samples_count, (AVRational){1, output_audio[0].ctx->sample_rate}, output_audio[0].ctx->time_base);
+            decoded_frame->pts = av_rescale_q(out_samples_count, (AVRational){1, output_audio[0].ctx->sample_rate}, output_audio[0].ctx->time_base) + pts_start;
             avcodec_fill_audio_frame(decoded_frame, output_audio[0].ctx->channels, output_audio[0].ctx->sample_fmt, out_buffer[0], out_samples_size, 0);
             out_samples_count += out_nb_samples;
+          } else {
+            decoded_frame->pts = av_frame_get_best_effort_timestamp(decoded_frame);
           }
+
           AVPacket pkt;
           av_init_packet(&pkt);
           pkt.data = NULL;
           pkt.size = 0;
 
           int got_packet_ptr = 0;
-          decoded_frame->pts = av_frame_get_best_effort_timestamp(decoded_frame);
           if(out_audio_count <= 0) error("trying to transcode uninitialized audio");
 
           if(avcodec_encode_audio2(output_audio[0].ctx, &pkt, decoded_frame, &got_packet_ptr) != 0)
                       error("Failed to encode aac");
           if (got_packet_ptr) {
+            //fprintf(stderr, "out_pts %d\n", pkt.pts/90);
             reply_avframe(&pkt, output_audio[0].codec);
           } else {
             reply_atom("empty");
@@ -351,7 +356,7 @@ void loop() {
 
       if(fr->content == frame_content_video) {
         if(!input_video.ctx) error("input video uninitialized");
-        AVFrame *decoded_frame = avcodec_alloc_frame();
+        AVFrame *decoded_frame = av_frame_alloc();
         int could_decode = 0;
         int ret = avcodec_decode_video2(input_video.ctx, decoded_frame, &could_decode, &packet);
         if(ret < 0) {
