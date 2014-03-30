@@ -25,23 +25,10 @@
  * @author Andreas Unterweger (dustsigns@gmail.com)
  */
 
-#include <stdio.h>
-
-#include "libavformat/avformat.h"
-#include "libavformat/avio.h"
-
-#include "libavcodec/avcodec.h"
-
-#include "libavutil/audio_fifo.h"
-#include "libavutil/avassert.h"
-#include "libavutil/avstring.h"
-#include "libavutil/frame.h"
-#include "libavutil/opt.h"
-
-#include "libswresample/swresample.h"
-
 #include "audio_transcode.h"
 
+
+void reply_avframe(AVPacket *pkt, AVCodec *codec);
 /**
  * Convert an error code into a text message.
  * @param error Error code to be converted
@@ -79,7 +66,7 @@ static int init_input_frame(AVFrame **frame)
  * If the input and output sample formats differ, a conversion is required
  * libswresample takes care of this, but requires initialization.
  */
-static int init_resampler(AVCodecContext *input_codec_context,
+int init_resampler(AVCodecContext *input_codec_context,
                           AVCodecContext *output_codec_context,
                           SwrContext **resample_context)
 {
@@ -121,7 +108,7 @@ static int init_resampler(AVCodecContext *input_codec_context,
 }
 
 /** Initialize a FIFO buffer for the audio samples to be encoded. */
-static int init_fifo(AVAudioFifo **fifo, AVCodecContext *output_codec_context)
+int init_fifo(AVAudioFifo **fifo, AVCodecContext *output_codec_context)
 {
     /** Create the FIFO buffer based on the specified output sample format. */
     if (!(*fifo = av_audio_fifo_alloc(output_codec_context->sample_fmt, output_codec_context->channels, 1))) {
@@ -254,7 +241,7 @@ static int add_samples_to_fifo(AVAudioFifo *fifo,
  * Read one audio frame from the input file, decodes, converts and stores
  * it in the FIFO buffer.
  */
-static int decode_convert_and_store(AVAudioFifo *fifo,
+int decode_convert_and_store(AVAudioFifo *fifo,
                                          AVPacket *packet,
                                          AVCodecContext *input_codec_context,
                                          AVCodecContext *output_codec_context,
@@ -383,7 +370,7 @@ static int encode_audio_frame(AVFrame *frame,
 
     /** Write one audio frame from the temporary packet to the output file. */
     if (*data_present) {
-        reply_avframe(&output_packet, output_codec_context);
+        reply_avframe(&output_packet, (AVCodec *)output_codec_context->codec);
         av_free_packet(&output_packet);
     }
 
@@ -394,7 +381,7 @@ static int encode_audio_frame(AVFrame *frame,
  * Load one audio frame from the FIFO buffer, encode and write it to the
  * output file.
  */
-static int load_encode_and_reply(AVAudioFifo *fifo, AVCodecContext *output_codec_context)
+int load_encode_and_reply(AVAudioFifo *fifo, AVCodecContext *output_codec_context)
 {
     /** Temporary storage of the output samples of the frame written to the file. */
     AVFrame *output_frame;

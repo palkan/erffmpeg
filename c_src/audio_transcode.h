@@ -1,14 +1,32 @@
+#ifndef AUDIO_TRANSCODE_H
+#define AUDIO_TRANSCODE_H
 
+#include <stdio.h>
 
-static int init_resampler(AVCodecContext *input_codec_context, AVCodecContext *output_codec_context, SwrContext **resample_context);
+#include "libavformat/avformat.h"
+#include "libavformat/avio.h"
 
-static int init_fifo(AVAudioFifo **fifo, AVCodecContext *output_codec_context);
+#include "libavcodec/avcodec.h"
 
-static int decode_convert_and_store(AVAudioFifo *fifo,
+#include "libavutil/audio_fifo.h"
+#include "libavutil/avassert.h"
+#include "libavutil/avstring.h"
+#include "libavutil/frame.h"
+#include "libavutil/opt.h"
+
+#include "libswresample/swresample.h"
+
+int init_resampler(AVCodecContext *input_codec_context, AVCodecContext *output_codec_context, SwrContext **resample_context);
+
+int init_fifo(AVAudioFifo **fifo, AVCodecContext *output_codec_context);
+
+int decode_convert_and_store(AVAudioFifo *fifo,
                                          AVPacket *packet,
                                          AVCodecContext *input_codec_context,
                                          AVCodecContext *output_codec_context,
                                          SwrContext *resampler_context,
                                          int *finished);
 
-static int load_encode_and_reply(AVAudioFifo *fifo, AVCodecContext *output_codec_context);
+int load_encode_and_reply(AVAudioFifo *fifo, AVCodecContext *output_codec_context);
+
+#endif
