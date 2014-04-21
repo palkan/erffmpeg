@@ -16,6 +16,8 @@
 
 #include "libswresample/swresample.h"
 
+void init_packet(AVPacket *packet);
+
 int init_resampler(AVCodecContext *input_codec_context, AVCodecContext *output_codec_context, SwrContext **resample_context);
 
 int init_fifo(AVAudioFifo **fifo, AVCodecContext *output_codec_context);
@@ -27,6 +29,6 @@ int decode_convert_and_store(AVAudioFifo *fifo,
                                          SwrContext *resampler_context,
                                          int *finished);
 
-int load_encode_and_reply(AVAudioFifo *fifo, AVCodecContext *output_codec_context);
+int load_and_encode(AVAudioFifo *fifo, AVCodecContext *output_codec_context, AVPacket *output_packet, int *got_packet_ptr, int *nb_samples);
 
 #endif

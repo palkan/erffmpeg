@@ -43,7 +43,7 @@ static char *const get_error_text(const int error)
 
 
 /** Initialize one data packet for reading or writing. */
-static void init_packet(AVPacket *packet)
+void init_packet(AVPacket *packet)
 {
     av_init_packet(packet);
     /** Set the packet data and size so that it is recognized as being empty. */
@@ -96,7 +96,7 @@ int init_resampler(AVCodecContext *input_codec_context,
         * not greater than the number of samples to be converted.
         * If the sample rates differ, this case has to be handled differently
         */
-        av_assert0(output_codec_context->sample_rate == input_codec_context->sample_rate);
+        //av_assert0(output_codec_context->sample_rate == input_codec_context->sample_rate);
 
         /** Open the resampler with the specified parameters. */
         if ((error = swr_init(*resample_context)) < 0) {
@@ -331,7 +331,6 @@ static int init_output_frame(AVFrame **frame,
     (*frame)->channel_layout = output_codec_context->channel_layout;
     (*frame)->format         = output_codec_context->sample_fmt;
     (*frame)->sample_rate    = output_codec_context->sample_rate;
-
     /**
      * Allocate the samples of the created frame. This call will make
      * sure that the audio frame can hold as many samples as specified.
@@ -349,31 +348,23 @@ static int init_output_frame(AVFrame **frame,
 /** Encode one frame worth of audio to the output file. */
 static int encode_audio_frame(AVFrame *frame,
                               AVCodecContext *output_codec_context,
-                              int *data_present)
+                              AVPacket *output_packet,
+                              int *got_packet_ptr)
 {
-    /** Packet used for temporary storage. */
-    AVPacket output_packet;
     int error;
-    init_packet(&output_packet);
+    //init_packet(output_packet);
 
     /**
      * Encode the audio frame and store it in the temporary packet.
      * The output audio stream encoder is used to do this.
      */
-    if ((error = avcodec_encode_audio2(output_codec_context, &output_packet,
-                                       frame, data_present)) < 0) {
+    if ((error = avcodec_encode_audio2(output_codec_context, output_packet,
+                                       frame, got_packet_ptr)) < 0) {
         fprintf(stderr, "Could not encode frame (error '%s')\n",
                 get_error_text(error));
-        av_free_packet(&output_packet);
+        av_free_packet(output_packet);
         return error;
     }
-
-    /** Write one audio frame from the temporary packet to the output file. */
-    if (*data_present) {
-        reply_avframe(&output_packet, (AVCodec *)output_codec_context->codec);
-        av_free_packet(&output_packet);
-    }
-
     return 0;
 }
 
@@ -381,7 +372,7 @@ static int encode_audio_frame(AVFrame *frame,
  * Load one audio frame from the FIFO buffer, encode and write it to the
  * output file.
  */
-int load_encode_and_reply(AVAudioFifo *fifo, AVCodecContext *output_codec_context)
+int load_and_encode(AVAudioFifo *fifo, AVCodecContext *output_codec_context, AVPacket *output_packet, int *got_packet_ptr, int *nb_samples)
 {
     /** Temporary storage of the output samples of the frame written to the file. */
     AVFrame *output_frame;
@@ -392,7 +383,6 @@ int load_encode_and_reply(AVAudioFifo *fifo, AVCodecContext *output_codec_contex
      */
     const int frame_size = FFMIN(av_audio_fifo_size(fifo),
                                  output_codec_context->frame_size);
-    int data_written;
 
     /** Initialize temporary storage for one output frame. */
     if (init_output_frame(&output_frame, output_codec_context, frame_size))
@@ -408,8 +398,10 @@ int load_encode_and_reply(AVAudioFifo *fifo, AVCodecContext *output_codec_contex
         return AVERROR_EXIT;
     }
 
+    *nb_samples = output_frame->nb_samples;
+
     /** Encode one frame worth of audio samples. */
-    if (encode_audio_frame(output_frame, output_codec_context, &data_written)) {
+    if (encode_audio_frame(output_frame, output_codec_context, output_packet, got_packet_ptr)) {
         av_frame_free(&output_frame);
         return AVERROR_EXIT;
     }

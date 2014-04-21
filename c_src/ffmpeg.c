@@ -40,6 +40,7 @@ Track output_audio[MAX_OUTPUT_TRACKS];
 int out_audio_count = 0;
 SwrContext *resample_context = NULL;
 AVAudioFifo *fifo = NULL;
+uint64_t samples = 0;
 Track output_video[MAX_OUTPUT_TRACKS];
 int out_video_count = 0;
 
@@ -144,7 +145,6 @@ void loop() {
         error("Unknown media content: '%s'", content);
       }
       if(t->codec) error("Double initialization of media '%s'", content);
-      fprintf(stderr, "coedc %s\n", codec);
       t->codec = avcodec_find_decoder_by_name(codec);
       t->ctx = avcodec_alloc_context3(t->codec);
       if(!t->codec || !t->ctx) 
@@ -241,6 +241,7 @@ void loop() {
             long ch = 0;
             if(ei_decode_long(buf, &idx, &ch) < 0) error("channels must be integer");
             ctx->channels = ch;
+            ctx->channel_layout = av_get_default_channel_layout(ch);
             continue;
           }
 
@@ -277,7 +278,6 @@ void loop() {
       config.data = ctx->extradata;
       config.size = ctx->extradata_size;
       reply_avframe(&config, t->codec);
-      fprintf(stderr, "frame_size %d\n", ctx->frame_size);
       continue;
     }
 
@@ -291,15 +291,31 @@ void loop() {
       packet.dts = fr->dts*90;
       packet.pts = fr->pts*90;
       packet.stream_index = fr->track_id;
-      //fprintf(stderr, "in_pts %d\n", fr->pts);
-      // if(packet_size != pkt_size) error("internal error in reading frame body");
 
       if(fr->content == frame_content_audio) {
         const int output_frame_size = output_audio[0].ctx->frame_size;
         int finished = 0;
-        decode_convert_and_store(fifo, &packet, input_audio.ctx, output_audio[0].ctx, resample_context, &finished);
-        while (av_audio_fifo_size(fifo) >= output_frame_size)
-            load_encode_and_reply(fifo, output_audio[0].ctx);
+        if (decode_convert_and_store(fifo, &packet, input_audio.ctx, output_audio[0].ctx, resample_context, &finished) < 0)
+            error("failed to decode audio");
+
+        /** Packet used for temporary storage. */
+        AVPacket output_packet;
+        init_packet(&output_packet);
+
+        int got_packet_ptr;
+        int nb_samples;
+
+        while (av_audio_fifo_size(fifo) >= output_frame_size) {
+            if (load_and_encode(fifo, output_audio[0].ctx, &output_packet, &got_packet_ptr, &nb_samples) < 0)
+                error("failed to encode audio");
+            if(got_packet_ptr) {
+                output_packet.pts = av_rescale_q(samples, (AVRational){1, output_audio[0].ctx->sample_rate}, output_audio[0].ctx->time_base);
+                output_packet.dts = output_packet.dts;
+                samples += nb_samples;
+                reply_avframe(&output_packet, (AVCodec *)output_audio[0].ctx->codec);
+            }
+        }
+        av_free_packet(&output_packet);
         free(fr);
         continue;
       }

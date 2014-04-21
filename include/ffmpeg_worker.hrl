@@ -19,7 +19,7 @@
   audio_output,
   video_input = undefined,
   video_output,
-  numbers = []
+  numbers = queue:new() :: queue()
 }).
 
 

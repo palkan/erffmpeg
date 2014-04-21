@@ -1,4 +1,3 @@
-
 -module(ffmpeg_worker).
 
 -include_lib("erlmedia/include/video_frame.hrl").
@@ -29,18 +28,8 @@ start_worker(Path) ->
 send({program, Port}, Term) ->
   erlang:port_command(Port, erlang:term_to_binary(Term)).
 
-send_frame(#video_frame{content = audio} = Frame, #ffmpeg_worker{port = Port, audio_output = Output, numbers = Numbers} = State) ->
-  send(Port, transform_frame(Frame)),
-  case fetch(Port) of
-    empty ->
-      {noreply, State};
-    #video_frame_ff{} = NewFrame ->
-      {Number, NextNumbers} = get_first(Numbers),
-      {reply, {accumulate_ffmpeg, transform_frame(NewFrame, Output), Number}, State#ffmpeg_worker{numbers = NextNumbers}};
-    Else ->
-      ?D(Else),
-      {reply, Else, State}
-  end.
+send_frame(Port, #video_frame{content = audio} = Frame) ->
+  send(Port, transform_frame(Frame)).
 
 
 send_init(Port, Input, Output) ->
@@ -84,15 +73,34 @@ handle_call({init, video, Codec, Config}, _From, #ffmpeg_worker{port = Port, vid
   {reply, send_init(Port, Input, Output), State#ffmpeg_worker{video_input = Input}};
 
 handle_call(_Request, _From, State) ->
-  {noreply, State}.
+  {reply, ok, State}.
 
-handle_cast({transcode, #video_frame{} = Frame, Number}, #ffmpeg_worker{numbers = Numbers} = State) ->
-  response_to_owner(send_frame(Frame, State#ffmpeg_worker{numbers = [Number|Numbers]}));
+handle_cast({transcode, #video_frame{} = Frame, Number}, #ffmpeg_worker{port = Port, numbers = Numbers} = State) ->
+  send_frame(Port, Frame),
+  {noreply, State#ffmpeg_worker{numbers = queue:in(Number, Numbers)}};
 
 handle_cast(_Request, State) ->
   {noreply, State}.
 
+handle_info({Port, Data}, #ffmpeg_worker{port = {program, Port}, owner = Owner, audio_output = AOutput, video_output = VOutput, numbers = Numbers} = State) ->
+  NewState = case handle_data(Data) of
+    #video_frame_ff{content = audio} = Frame ->
+      {{value, Number}, NewNumbers} = queue:out(Numbers),
+      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, AOutput), Number}, Owner),
+      State#ffmpeg_worker{numbers = NewNumbers};
+    #video_frame_ff{content = video} = Frame ->
+      {{value, Number}, NewNumbers} = queue:out(Numbers),
+      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, VOutput), Number}, Owner),
+      State#ffmpeg_worker{numbers = NewNumbers};
+    Else ->
+      ?D(Else),
+      response_to_owner(Else, Owner),
+      State
+  end,
+  {noreply, NewState};
+
 handle_info(_Info, State) ->
+  ?D(_Info),
   {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -122,29 +130,31 @@ transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = C
 transform_frame(#video_frame{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}) ->
   #video_frame_ff{content = Content, dts = Dts, pts = Pts, stream_id = Stream_id, codec = Codec, flavor = Flavor, body = Body, next_id = Next_id}.
 
-response_to_owner({reply, Term, #ffmpeg_worker{owner = Owner} = State}) ->
-  gen_server:cast(Owner, Term),
-  {noreply, State};
-
-response_to_owner({noreply, State}) ->
-  {noreply, State}.
+response_to_owner(Term, Owner) ->
+  gen_server:cast(Owner, Term).
 
 fetch(Port) ->
   fetch(Port, 2000).
 
 fetch({program, Port}, Timeout) ->
   receive
-    {Port, {exit_status, 0}} -> closed;
-    {Port, {exit_status, Code}} -> {exit, Code};
-    {Port, {data, Data}} -> erlang:binary_to_term(Data);
-    {Port, Data} -> {ok, Data}
+    {Port, Data} ->
+      handle_data(Data)
   after Timeout ->
     {error, timeout}
   end.
 
-get_first(List) ->
-  [First|RList] = lists:reverse(List),
-  {First, lists:reverse(RList)}.
+handle_data({exit_status, 0}) ->
+  closed;
+
+handle_data({exit_status, Code}) ->
+  {exit, Code};
+
+handle_data({data, Data}) ->
+  erlang:binary_to_term(Data);
+
+handle_data(Data) ->
+  {ok, Data}.
 
 ev_to_av(h264) -> libx264;
 ev_to_av(aac) -> libfaac;
