@@ -157,7 +157,7 @@ handle_data(Data) ->
   {ok, Data}.
 
 ev_to_av(h264) -> libx264;
-ev_to_av(aac) -> libfaac;
+ev_to_av(aac) -> libfdk_aac;
 ev_to_av(speex) -> libspeex;
 ev_to_av(rate5) -> 5512;
 ev_to_av(rate11) -> 11025;

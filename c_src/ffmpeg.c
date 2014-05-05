@@ -40,7 +40,7 @@ Track output_audio[MAX_OUTPUT_TRACKS];
 int out_audio_count = 0;
 SwrContext *resample_context = NULL;
 AVAudioFifo *fifo = NULL;
-uint64_t samples = 0;
+int64_t audio_pts = 0;
 Track output_video[MAX_OUTPUT_TRACKS];
 int out_video_count = 0;
 
@@ -293,6 +293,10 @@ void loop() {
       packet.stream_index = fr->track_id;
 
       if(fr->content == frame_content_audio) {
+
+        /** Define the first pts. */
+        audio_pts = FFMIN(packet.pts, audio_pts);
+
         const int output_frame_size = output_audio[0].ctx->frame_size;
         int finished = 0;
         if (decode_convert_and_store(fifo, &packet, input_audio.ctx, output_audio[0].ctx, resample_context, &finished) < 0)
@@ -302,16 +306,16 @@ void loop() {
         AVPacket output_packet;
         init_packet(&output_packet);
 
-        int got_packet_ptr;
+        int got_packet;
         int nb_samples;
 
         while (av_audio_fifo_size(fifo) >= output_frame_size) {
-            if (load_and_encode(fifo, output_audio[0].ctx, &output_packet, &got_packet_ptr, &nb_samples) < 0)
+            if (load_and_encode(fifo, output_audio[0].ctx, &output_packet, &got_packet, &nb_samples) < 0)
                 error("failed to encode audio");
-            if(got_packet_ptr) {
-                output_packet.pts = av_rescale_q(samples, (AVRational){1, output_audio[0].ctx->sample_rate}, output_audio[0].ctx->time_base);
+            if(got_packet) {
+                output_packet.pts = audio_pts;
                 output_packet.dts = output_packet.dts;
-                samples += nb_samples;
+                audio_pts += av_rescale_q(nb_samples, (AVRational){1, output_audio[0].ctx->sample_rate}, output_audio[0].ctx->time_base);
                 reply_avframe(&output_packet, (AVCodec *)output_audio[0].ctx->codec);
             }
         }
