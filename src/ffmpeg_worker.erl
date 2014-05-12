@@ -8,7 +8,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, init_ffmpeg/4, transcode/3]).
+-export([start_link/1, init_ffmpeg/4, transcode/2]).
 
 %% gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -54,7 +54,7 @@ init(Options) ->
   Bitrate = proplists:get_value(bitrate, Options),
   Sample_rate = proplists:get_value(sample_rate, Options),
   Channels = proplists:get_value(channels, Options),
-  {ok, #ffmpeg_worker{port = Port, audio_output = #init_output{content = audio, codec = libfaac, track_id = 2, options = [{bitrate, Bitrate}, {sample_rate, Sample_rate}, {channels, Channels}]}}}.
+  {ok, #ffmpeg_worker{port = Port, audio_output = #init_output{content = audio, codec = libfdk_aac, track_id = 2, options = [{bitrate, Bitrate}, {sample_rate, Sample_rate}, {channels, Channels}]}}}.
 
 handle_call({init, audio, Codec, Config}, {Pid, _Ref}, #ffmpeg_worker{owner = undefined, port = Port, audio_output = Output} = State) ->
   Input = #init_input{content = audio, codec = ev_to_av(Codec), config = Config},
@@ -75,32 +75,25 @@ handle_call({init, video, Codec, Config}, _From, #ffmpeg_worker{port = Port, vid
 handle_call(_Request, _From, State) ->
   {reply, ok, State}.
 
-handle_cast({transcode, #video_frame{} = Frame, Number}, #ffmpeg_worker{port = Port, numbers = Numbers} = State) ->
+handle_cast({transcode, #video_frame{} = Frame}, #ffmpeg_worker{port = Port} = State) ->
   send_frame(Port, Frame),
-  {noreply, State#ffmpeg_worker{numbers = queue:in(Number, Numbers)}};
+  {noreply, State};
 
 handle_cast(_Request, State) ->
   {noreply, State}.
 
-handle_info({Port, Data}, #ffmpeg_worker{port = {program, Port}, owner = Owner, audio_output = AOutput, video_output = VOutput, numbers = Numbers} = State) ->
-  NewState = case handle_data(Data) of
+handle_info({Port, Data}, #ffmpeg_worker{port = {program, Port}, owner = Owner, audio_output = AOutput, video_output = VOutput} = State) ->
+  case handle_data(Data) of
     #video_frame_ff{content = audio} = Frame ->
-      {{value, Number}, NewNumbers} = queue:out(Numbers),
-      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, AOutput), Number}, Owner),
-      State#ffmpeg_worker{numbers = NewNumbers};
+      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, AOutput)}, Owner);
     #video_frame_ff{content = video} = Frame ->
-      {{value, Number}, NewNumbers} = queue:out(Numbers),
-      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, VOutput), Number}, Owner),
-      State#ffmpeg_worker{numbers = NewNumbers};
+      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, VOutput)}, Owner);
     Else ->
-      ?D(Else),
-      response_to_owner(Else, Owner),
-      State
+      response_to_owner(Else, Owner)
   end,
-  {noreply, NewState};
+  {noreply, State};
 
 handle_info(_Info, State) ->
-  ?D(_Info),
   {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -112,8 +105,8 @@ code_change(_OldVsn, State, _Extra) ->
 init_ffmpeg(Pid, Content, Codec, Config) ->
   gen_server:call(Pid, {init, Content, Codec, Config}).
 
-transcode(Pid, Frame, Number) ->
-  gen_server:cast(Pid, {transcode, Frame, Number}).
+transcode(Pid, Frame) ->
+  gen_server:cast(Pid, {transcode, Frame}).
 
 transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = keyframe, body = Body, next_id = Next_id}, #init_output{options = Options}) ->
   Bitrate = proplists:get_value(bitrate, Options),
@@ -168,7 +161,7 @@ ev_to_av(bit16) -> 16000;
 ev_to_av(Codec) -> Codec.
 
 av_to_ev(libx264) -> h264;
-av_to_ev(libfaac) -> aac;
+av_to_ev(libfdk_aac) -> aac;
 av_to_ev(libspeex) -> speex;
 av_to_ev(5512) -> rate5;
 av_to_ev(11025) -> rate11;
