@@ -9,6 +9,7 @@
 -record(init_input, {
   content = undefined :: frame_content(),
   codec = undefined :: frame_codec(),
+  options = [],
   config = <<>> :: binary()
 }).
 

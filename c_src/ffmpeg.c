@@ -40,7 +40,7 @@ Track output_audio[MAX_OUTPUT_TRACKS];
 int out_audio_count = 0;
 SwrContext *resample_context = NULL;
 AVAudioFifo *fifo = NULL;
-int64_t audio_pts = 0;
+int64_t audio_pts = 1e8;
 Track output_video[MAX_OUTPUT_TRACKS];
 int out_video_count = 0;
 
@@ -123,11 +123,66 @@ void loop() {
       return;
     }
     if(!strcmp(command, "init_input")) {
-      if(arity != 3) error("Must provide 3 arguments to init_input command");
+      if(arity != 4) error("Must provide 3 arguments to init_input command");
       char content[1024];
       char codec[1024];
       if(ei_decode_atom(buf, &idx, content) == -1) error("Must provide content as an atom");
       if(ei_decode_atom(buf, &idx, codec) == -1) error("Must provide codec as an atom");
+
+      Track *tr = NULL;
+      if(!strcmp(content, "video")) {
+        tr = &input_video;
+      } else if(!strcmp(content, "audio")) {
+        tr = &input_audio;
+      } else {
+        error("Unknown media content: '%s'", content);
+      }
+      if(tr->codec) error("Double initialization of media '%s'", content);
+      tr->codec = avcodec_find_decoder_by_name(codec);
+      tr->ctx = avcodec_alloc_context3(tr->codec);
+      if(!tr->codec || !tr->ctx)
+        error("Unknown %s decoder '%s'", content, codec);
+
+      int options_count = 0;
+      if(ei_decode_list_header(buf, &idx, &options_count) < 0) error("options must be a proplist");
+      while(options_count > 0) {
+        int arity1 = 0;
+
+        int q,s;
+        ei_get_type(buf, &idx, &q, &s);
+        if(q == ERL_NIL_EXT) {
+            ei_skip_term(buf, &idx);
+            break;
+        }
+
+        if(ei_decode_tuple_header(buf, &idx, &arity1) < 0) error("options must be a proper proplist");
+        if(arity1 != 2) error("tuples in options proplist must be arity 2");
+
+        char key[MAXATOMLEN];
+        if(ei_decode_atom(buf, &idx, key) == 0) {
+            if(!strcmp(key, "sample_rate")) {
+                long sr = 0;
+                if(ei_decode_long(buf, &idx, &sr) < 0) error("sample_rate must be integer");
+                tr->ctx->sample_rate = sr;
+                continue;
+            }
+
+            if(!strcmp(key, "channels")) {
+                long ch = 0;
+                if(ei_decode_long(buf, &idx, &ch) < 0) error("channels must be integer");
+                tr->ctx->channels = ch;
+                tr->ctx->channel_layout = av_get_default_channel_layout(ch);
+                continue;
+            }
+
+            fprintf(stderr, "Unknown key: '%s'\r\n", key);
+            ei_skip_term(buf, &idx);
+            continue;
+        } else {
+                error("Invalid options proplist");
+        }
+      }
+      tr->ctx->time_base = (AVRational){1, 90000};
 
       int decoder_config_len = 0;
       ei_get_type(buf, &idx, &t, &decoder_config_len);
@@ -136,26 +191,12 @@ void loop() {
       long bin_len = 0;
       ei_decode_binary(buf, &idx, decoder_config, &bin_len);
 
-      Track *t = NULL;
-      if(!strcmp(content, "video")) {
-        t = &input_video;
-      } else if(!strcmp(content, "audio")) {
-        t = &input_audio;
-      } else {
-        error("Unknown media content: '%s'", content);
-      }
-      if(t->codec) error("Double initialization of media '%s'", content);
-      t->codec = avcodec_find_decoder_by_name(codec);
-      t->ctx = avcodec_alloc_context3(t->codec);
-      if(!t->codec || !t->ctx) 
-        error("Unknown %s decoder '%s'", content, codec);
-      t->ctx->time_base = (AVRational){1, 90000};
-      t->ctx->channels = 1;
-      t->ctx->extradata_size = decoder_config_len;
-      t->ctx->extradata = decoder_config;
-      if(avcodec_open2(t->ctx, t->codec, NULL) < 0) 
-        error("failed to allocate %s decoder", content);
+      tr->ctx->extradata_size = decoder_config_len;
+      tr->ctx->extradata = decoder_config;
 
+      if(avcodec_open2(tr->ctx, tr->codec, NULL) < 0)
+        error("failed to allocate %s decoder", content);
+      tr->ctx->sample_fmt = AV_SAMPLE_FMT_S16;
       reply_atom("ready");
       continue;
     }
@@ -262,7 +303,7 @@ void loop() {
       }
       if(!strcmp(content, "audio")) {
         ctx->sample_fmt = AV_SAMPLE_FMT_S16;
-        ctx->profile = FF_PROFILE_AAC_MAIN;
+        ctx->profile = FF_PROFILE_AAC_LOW;
         if (init_resampler(input_audio.ctx, ctx, &resample_context))
             error("failed to init resampler");
         if (init_fifo(&fifo, ctx))
@@ -299,8 +340,13 @@ void loop() {
 
         const int output_frame_size = output_audio[0].ctx->frame_size;
         int finished = 0;
-        if (decode_convert_and_store(fifo, &packet, input_audio.ctx, output_audio[0].ctx, resample_context, &finished) < 0)
-            error("failed to decode audio");
+
+        while (packet.size > 0)
+        {
+            if (decode_convert_and_store(fifo, &packet, input_audio.ctx, output_audio[0].ctx, resample_context, &finished) < 0)
+                error("failed to decode audio");
+        }
+        av_free_packet(&packet);
 
         /** Packet used for temporary storage. */
         AVPacket output_packet;
@@ -314,7 +360,7 @@ void loop() {
                 error("failed to encode audio");
             if(got_packet) {
                 output_packet.pts = audio_pts;
-                output_packet.dts = output_packet.dts;
+                output_packet.dts = audio_pts;
                 audio_pts += av_rescale_q(nb_samples, (AVRational){1, output_audio[0].ctx->sample_rate}, output_audio[0].ctx->time_base);
                 reply_avframe(&output_packet, (AVCodec *)output_audio[0].ctx->codec);
             }

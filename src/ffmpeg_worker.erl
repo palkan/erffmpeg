@@ -8,7 +8,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, init_ffmpeg/4, transcode/2]).
+-export([start_link/1, init_video/3, init_audio/5, transcode/2]).
 
 %% gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -56,19 +56,31 @@ init(Options) ->
   Channels = proplists:get_value(channels, Options),
   {ok, #ffmpeg_worker{port = Port, audio_output = #init_output{content = audio, codec = libfdk_aac, track_id = 2, options = [{bitrate, Bitrate}, {sample_rate, Sample_rate}, {channels, Channels}]}}}.
 
-handle_call({init, audio, Codec, Config}, {Pid, _Ref}, #ffmpeg_worker{owner = undefined, port = Port, audio_output = Output} = State) ->
-  Input = #init_input{content = audio, codec = ev_to_av(Codec), config = Config},
+handle_call({init_audio, Codec, Config, SampleRate, Channels}, {Pid, _Ref}, #ffmpeg_worker{owner = undefined, port = Port, audio_output = Output} = State) ->
+  Options = case Codec of
+              speex ->
+                [{sample_rate, 16000}, {channels, ev_to_av(Channels)}];
+              _ ->
+                [{sample_rate, ev_to_av(SampleRate)}, {channels, ev_to_av(Channels)}]
+            end,
+  Input = #init_input{content = audio, codec = ev_to_av(Codec), config = Config, options = Options},
   {reply, send_init(Port, Input, Output), State#ffmpeg_worker{owner = Pid, audio_input = Input}};
 
-handle_call({init, audio, Codec, Config}, _From, #ffmpeg_worker{port = Port, audio_output = Output} = State) ->
-  Input = #init_input{content = audio, codec = ev_to_av(Codec), config = Config},
+handle_call({init_audio, Codec, Config, SampleRate, Channels}, _From, #ffmpeg_worker{port = Port, audio_output = Output} = State) ->
+  Options = case Codec of
+              speex ->
+                [{sample_rate, 16000}, {channels, ev_to_av(Channels)}];
+              _ ->
+                [{sample_rate, ev_to_av(SampleRate)}, {channels, ev_to_av(Channels)}]
+            end,
+  Input = #init_input{content = audio, codec = ev_to_av(Codec), config = Config, options = Options},
   {reply, send_init(Port, Input, Output), State#ffmpeg_worker{audio_input = Input}};
 
-handle_call({init, video, Codec, Config}, {Pid, _Ref}, #ffmpeg_worker{owner = undefined, port = Port, video_output = Output} = State) ->
+handle_call({init_video, Codec, Config}, {Pid, _Ref}, #ffmpeg_worker{owner = undefined, port = Port, video_output = Output} = State) ->
   Input = #init_input{content = video, codec = ev_to_av(Codec), config = Config},
   {reply, send_init(Port, Input, Output), State#ffmpeg_worker{owner = Pid, video_input = Input}};
 
-handle_call({init, video, Codec, Config}, _From, #ffmpeg_worker{port = Port, video_output = Output} = State) ->
+handle_call({init_video, Codec, Config}, _From, #ffmpeg_worker{port = Port, video_output = Output} = State) ->
   Input = #init_input{content = video, codec = ev_to_av(Codec), config = Config},
   {reply, send_init(Port, Input, Output), State#ffmpeg_worker{video_input = Input}};
 
@@ -102,8 +114,11 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
-init_ffmpeg(Pid, Content, Codec, Config) ->
-  gen_server:call(Pid, {init, Content, Codec, Config}).
+init_audio(Pid, Codec, Config, SampleRate, Channels) ->
+  gen_server:call(Pid, {init_audio, Codec, Config, SampleRate, Channels}).
+
+init_video(Pid, Codec, Config) ->
+  gen_server:call(Pid, {init_video, Codec, Config}).
 
 transcode(Pid, Frame) ->
   gen_server:cast(Pid, {transcode, Frame}).
@@ -158,6 +173,8 @@ ev_to_av(rate22) -> 22050;
 ev_to_av(rate44) -> 44100;
 ev_to_av(bit8) -> 8000;
 ev_to_av(bit16) -> 16000;
+ev_to_av(mono) -> 1;
+ev_to_av(stereo) -> 2;
 ev_to_av(Codec) -> Codec.
 
 av_to_ev(libx264) -> h264;

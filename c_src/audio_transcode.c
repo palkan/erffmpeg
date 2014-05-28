@@ -87,6 +87,7 @@ int init_resampler(AVCodecContext *input_codec_context,
                                               input_codec_context->sample_fmt,
                                               input_codec_context->sample_rate,
                                               0, NULL);
+        fprintf(stderr, "%d %d\n\n\n\n", (int)output_codec_context->sample_fmt, (int)input_codec_context->sample_fmt);
         if (!*resample_context) {
             fprintf(stderr, "Could not allocate resample context\n");
             return AVERROR(ENOMEM);
@@ -124,20 +125,24 @@ static int decode_audio_frame(AVFrame *frame,
                               AVCodecContext *input_codec_context,
                               int *data_present, int *finished)
 {
-    int error;
+    int ret;
     /**
      * Decode the audio frame stored in the temporary packet.
      * The input audio stream decoder is used to do this.
      * If we are at the end of the file, pass an empty packet to the decoder
      * to flush it.
      */
-    if ((error = avcodec_decode_audio4(input_codec_context, frame,
+    if ((ret = avcodec_decode_audio4(input_codec_context, frame,
                                        data_present, input_packet)) < 0) {
         fprintf(stderr, "Could not decode frame (error '%s')\n",
-                get_error_text(error));
+                get_error_text(ret));
         av_free_packet(input_packet);
-        return error;
+        return ret;
     }
+
+    /*If input_packet contains several frames.*/
+    input_packet->size -= ret;
+    input_packet->data += ret;
 
     /**
      * If the decoder has not been flushed completely, we are not finished,
@@ -145,7 +150,6 @@ static int decode_audio_frame(AVFrame *frame,
      */
     if (*finished && *data_present)
         *finished = 0;
-    av_free_packet(input_packet);
     return 0;
 }
 
