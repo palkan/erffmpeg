@@ -31,4 +31,6 @@ int decode_convert_and_store(AVAudioFifo *fifo,
 
 int load_and_encode(AVAudioFifo *fifo, AVCodecContext *output_codec_context, AVPacket *output_packet, int *got_packet_ptr, int *nb_samples);
 
+int encode_audio_frame(AVFrame *frame, AVCodecContext *output_codec_context, AVPacket *output_packet, int *got_packet_ptr, int *nb_samples);
+
 #endif

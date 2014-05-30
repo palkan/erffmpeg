@@ -8,7 +8,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, init_video/3, init_audio/5, transcode/2]).
+-export([start_link/1, init_video/3, init_audio/5, transcode/2, finish/1]).
 
 %% gen_server
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -84,6 +84,10 @@ handle_call({init_video, Codec, Config}, _From, #ffmpeg_worker{port = Port, vide
   Input = #init_input{content = video, codec = ev_to_av(Codec), config = Config},
   {reply, send_init(Port, Input, Output), State#ffmpeg_worker{video_input = Input}};
 
+handle_call(finish, _From, #ffmpeg_worker{port = Port} = State) ->
+  send(Port, {finish}),
+  {reply, ok, State};
+
 handle_call(_Request, _From, State) ->
   {reply, ok, State}.
 
@@ -97,13 +101,18 @@ handle_cast(_Request, State) ->
 handle_info({Port, Data}, #ffmpeg_worker{port = {program, Port}, owner = Owner, audio_output = AOutput, video_output = VOutput} = State) ->
   case handle_data(Data) of
     #video_frame_ff{content = audio} = Frame ->
-      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, AOutput)}, Owner);
+      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, AOutput)}, Owner),
+      {noreply, State};
     #video_frame_ff{content = video} = Frame ->
-      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, VOutput)}, Owner);
+      response_to_owner({accumulate_ffmpeg, transform_frame(Frame, VOutput)}, Owner),
+      {noreply, State};
+    closed ->
+      hls_media:finish(Owner),
+      {stop, normal, State};
     Else ->
-      response_to_owner(Else, Owner)
-  end,
-  {noreply, State};
+      ?D(Else),
+      {stop, ffmpeg_error, State}
+  end;
 
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -122,6 +131,9 @@ init_video(Pid, Codec, Config) ->
 
 transcode(Pid, Frame) ->
   gen_server:cast(Pid, {transcode, Frame}).
+
+finish(Pid) ->
+  gen_server:call(Pid, finish).
 
 transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = keyframe, body = Body, next_id = Next_id}, #init_output{options = Options}) ->
   Bitrate = proplists:get_value(bitrate, Options),

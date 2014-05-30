@@ -199,21 +199,22 @@ static int init_converted_samples(uint8_t ***converted_input_samples,
  * by frame_size.
  */
 static int convert_samples(const uint8_t **input_data,
-                           uint8_t **converted_data, const int frame_size,
+                           uint8_t **converted_data, const int in_samples,
+                           const int out_samples,
                            SwrContext *resample_context)
 {
     int error;
 
     /** Convert the samples using the resampler. */
     if ((error = swr_convert(resample_context,
-                             converted_data, frame_size,
-                             input_data    , frame_size)) < 0) {
+                             converted_data, out_samples,
+                             input_data    , in_samples)) < 0) {
         fprintf(stderr, "Could not convert input samples (error '%s')\n",
                 get_error_text(error));
         return error;
     }
 
-    return 0;
+    return error;
 }
 
 /** Add converted input audio samples to the FIFO buffer for later processing. */
@@ -278,21 +279,23 @@ int decode_convert_and_store(AVAudioFifo *fifo,
     /** If there is decoded data, convert and store it */
     if (data_present) {
         /** Initialize the temporary storage for the converted input samples. */
+        int out_samples = av_rescale_rnd(swr_get_delay(resampler_context, output_codec_context->sample_rate) + input_frame->nb_samples, input_codec_context->sample_rate, output_codec_context->sample_rate, AV_ROUND_UP);
         if (init_converted_samples(&converted_input_samples, output_codec_context,
-                                   input_frame->nb_samples))
+                                   out_samples))
             goto cleanup;
 
         /**
          * Convert the input samples to the desired output sample format.
          * This requires a temporary storage provided by converted_input_samples.
          */
-        if (convert_samples((const uint8_t**)input_frame->extended_data, converted_input_samples,
-                            input_frame->nb_samples, resampler_context))
+        int converted_size;
+        if ((converted_size = convert_samples((const uint8_t**)input_frame->extended_data, converted_input_samples,
+                            input_frame->nb_samples, out_samples, resampler_context)) < 0)
             goto cleanup;
 
         /** Add the converted input samples to the FIFO buffer for later processing. */
         if (add_samples_to_fifo(fifo, converted_input_samples,
-                                input_frame->nb_samples))
+                                converted_size))
             goto cleanup;
         ret = 0;
     }
@@ -340,7 +343,7 @@ static int init_output_frame(AVFrame **frame,
      * sure that the audio frame can hold as many samples as specified.
      */
     if ((error = av_frame_get_buffer(*frame, 0)) < 0) {
-        fprintf(stderr, "Could allocate output frame samples (error '%s')\n",
+        fprintf(stderr, "Could not allocate output frame samples (error '%s')\n",
                 get_error_text(error));
         av_frame_free(frame);
         return error;
@@ -350,10 +353,11 @@ static int init_output_frame(AVFrame **frame,
 }
 
 /** Encode one frame worth of audio to the output file. */
-static int encode_audio_frame(AVFrame *frame,
+int encode_audio_frame(AVFrame *frame,
                               AVCodecContext *output_codec_context,
                               AVPacket *output_packet,
-                              int *got_packet_ptr)
+                              int *got_packet_ptr,
+                              int *nb_samples)
 {
     int error;
     //init_packet(output_packet);
@@ -362,6 +366,7 @@ static int encode_audio_frame(AVFrame *frame,
      * Encode the audio frame and store it in the temporary packet.
      * The output audio stream encoder is used to do this.
      */
+    if (frame) *nb_samples = frame->nb_samples;
     if ((error = avcodec_encode_audio2(output_codec_context, output_packet,
                                        frame, got_packet_ptr)) < 0) {
         fprintf(stderr, "Could not encode frame (error '%s')\n",
@@ -402,10 +407,8 @@ int load_and_encode(AVAudioFifo *fifo, AVCodecContext *output_codec_context, AVP
         return AVERROR_EXIT;
     }
 
-    *nb_samples = output_frame->nb_samples;
-
     /** Encode one frame worth of audio samples. */
-    if (encode_audio_frame(output_frame, output_codec_context, output_packet, got_packet_ptr)) {
+    if (encode_audio_frame(output_frame, output_codec_context, output_packet, got_packet_ptr, nb_samples)) {
         av_frame_free(&output_frame);
         return AVERROR_EXIT;
     }

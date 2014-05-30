@@ -54,7 +54,7 @@ void reply_atom(char *a);
 void reply_avframe(AVPacket *pkt, AVCodec *codec);
 void error(const char *fmt, ...);
 ssize_t read1(int fd, void *buf, ssize_t len);
-
+FILE *logg;
 
 int main(int argc, char *argv[]) {
   avcodec_register_all();
@@ -81,6 +81,7 @@ void loop() {
 
   uint32_t buf_size = 10240;
   char *buf = (char *)malloc(buf_size);
+  logg = fopen("/home/ilia/develop/log", "w");
   while(1) {
     uint32_t len;
     int idx = 0;
@@ -121,6 +122,45 @@ void loop() {
     }
     if(!strcmp(command, "exit")) {
       return;
+    }
+    if (!strcmp(command, "finish")) {
+        if(output_audio[0].ctx) {
+             AVPacket output_packet;
+             init_packet(&output_packet);
+             int got_packet;
+             int nb_samples;
+             const int output_frame_size = output_audio[0].ctx->frame_size;
+             /*int ret = 0;
+             do {
+                int finished = 0;
+                ret = decode_convert_and_store(fifo, &output_packet, input_audio.ctx, output_audio[0].ctx, resample_context, &finished) < 0;
+                if (ret < 0)                                                                                                                             ///What is it?
+                    error("failed to decode audio");
+             } while (ret > 0);    */
+             while (av_audio_fifo_size(fifo) >= output_frame_size) {
+                 init_packet(&output_packet);
+                 if (load_and_encode(fifo, output_audio[0].ctx, &output_packet, &got_packet, &nb_samples) < 0)
+                                error("failed to encode audio");
+                 if(got_packet) {
+                    output_packet.dts = output_packet.pts = audio_pts;
+                    audio_pts += output_packet.duration;
+                    reply_avframe(&output_packet, (AVCodec *)output_audio[0].ctx->codec);
+                 }
+                 av_free_packet(&output_packet);
+             }
+             do {
+                init_packet(&output_packet);
+                if(encode_audio_frame(NULL, output_audio[0].ctx, &output_packet, &got_packet, &nb_samples))
+                    error("failed to encode audio");
+                if(got_packet) {
+                    output_packet.dts = output_packet.pts = audio_pts;
+                    audio_pts += output_packet.duration;
+                    reply_avframe(&output_packet, (AVCodec *)output_audio[0].ctx->codec);
+                }
+                av_free_packet(&output_packet);
+             } while (got_packet);
+        }
+        return;
     }
     if(!strcmp(command, "init_input")) {
       if(arity != 4) error("Must provide 3 arguments to init_input command");
@@ -193,10 +233,10 @@ void loop() {
 
       tr->ctx->extradata_size = decoder_config_len;
       tr->ctx->extradata = decoder_config;
-
       if(avcodec_open2(tr->ctx, tr->codec, NULL) < 0)
         error("failed to allocate %s decoder", content);
-      tr->ctx->sample_fmt = AV_SAMPLE_FMT_S16;
+      if(tr->ctx->sample_fmt == AV_SAMPLE_FMT_NONE)
+        tr->ctx->sample_fmt = AV_SAMPLE_FMT_S16;
       reply_atom("ready");
       continue;
     }
@@ -332,7 +372,7 @@ void loop() {
       packet.dts = fr->dts*90;
       packet.pts = fr->pts*90;
       packet.stream_index = fr->track_id;
-
+      fprintf(logg, "Pts %d ", fr->pts);
       if(fr->content == frame_content_audio) {
 
         /** Define the first pts. */
@@ -350,22 +390,23 @@ void loop() {
 
         /** Packet used for temporary storage. */
         AVPacket output_packet;
-        init_packet(&output_packet);
+
 
         int got_packet;
         int nb_samples;
 
         while (av_audio_fifo_size(fifo) >= output_frame_size) {
+            init_packet(&output_packet);
             if (load_and_encode(fifo, output_audio[0].ctx, &output_packet, &got_packet, &nb_samples) < 0)
                 error("failed to encode audio");
             if(got_packet) {
-                output_packet.pts = audio_pts;
-                output_packet.dts = audio_pts;
-                audio_pts += av_rescale_q(nb_samples, (AVRational){1, output_audio[0].ctx->sample_rate}, output_audio[0].ctx->time_base);
+                output_packet.dts = output_packet.pts = audio_pts;
+                audio_pts += output_packet.duration;
                 reply_avframe(&output_packet, (AVCodec *)output_audio[0].ctx->codec);
+                fprintf(logg, "New Pts %d\n", output_packet.pts/90);
             }
+            av_free_packet(&output_packet);
         }
-        av_free_packet(&output_packet);
         free(fr);
         continue;
       }
