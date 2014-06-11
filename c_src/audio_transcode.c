@@ -87,7 +87,6 @@ int init_resampler(AVCodecContext *input_codec_context,
                                               input_codec_context->sample_fmt,
                                               input_codec_context->sample_rate,
                                               0, NULL);
-        fprintf(stderr, "%d %d\n\n\n\n", (int)output_codec_context->sample_fmt, (int)input_codec_context->sample_fmt);
         if (!*resample_context) {
             fprintf(stderr, "Could not allocate resample context\n");
             return AVERROR(ENOMEM);
@@ -242,6 +241,54 @@ static int add_samples_to_fifo(AVAudioFifo *fifo,
     return 0;
 }
 
+int convert_and_store(AVFrame *input_frame,
+                        AVAudioFifo *fifo,
+                        AVCodecContext *input_codec_context,
+                        AVCodecContext *output_codec_context,
+                        SwrContext *resampler_context)
+{
+    int error;
+    int out_samples, in_samples = 0;
+    const uint8_t **data = NULL;
+    if (input_frame) {
+        in_samples = input_frame->nb_samples;
+        data = (const uint8_t **)input_frame->extended_data;
+    }
+
+    out_samples = av_rescale_rnd(swr_get_delay(resampler_context, output_codec_context->sample_rate) + in_samples, input_codec_context->sample_rate, output_codec_context->sample_rate, AV_ROUND_UP);
+    uint8_t **converted_input_samples = NULL;
+
+    if ((error = init_converted_samples(&converted_input_samples, output_codec_context,
+                               out_samples)) < 0) {
+        return error;
+    }
+    /**
+     * Convert the input samples to the desired output sample format.
+     * This requires a temporary storage provided by converted_input_samples.
+     */
+    int converted_size;
+    if ((error = convert_samples(data, converted_input_samples,
+                        in_samples, out_samples, resampler_context)) < 0) {
+        if (converted_input_samples) {
+            av_freep(&converted_input_samples[0]);
+            free(converted_input_samples);
+        }
+        return error;
+    }
+    converted_size = error;
+
+    /** Add the converted input samples to the FIFO buffer for later processing. */
+    if ((error = add_samples_to_fifo(fifo, converted_input_samples,
+                            converted_size)) < 0) {
+        if (converted_input_samples) {
+            av_freep(&converted_input_samples[0]);
+            free(converted_input_samples);
+        }
+        return error;
+    }
+
+    return converted_size;
+}
 /**
  * Read one audio frame from the input file, decodes, converts and stores
  * it in the FIFO buffer.
@@ -256,7 +303,6 @@ int decode_convert_and_store(AVAudioFifo *fifo,
     /** Temporary storage of the input samples of the frame read from the file. */
     AVFrame *input_frame = NULL;
     /** Temporary storage for the converted input samples. */
-    uint8_t **converted_input_samples = NULL;
     int data_present;
     int ret = AVERROR_EXIT;
 
@@ -278,34 +324,13 @@ int decode_convert_and_store(AVAudioFifo *fifo,
     }
     /** If there is decoded data, convert and store it */
     if (data_present) {
-        /** Initialize the temporary storage for the converted input samples. */
-        int out_samples = av_rescale_rnd(swr_get_delay(resampler_context, output_codec_context->sample_rate) + input_frame->nb_samples, input_codec_context->sample_rate, output_codec_context->sample_rate, AV_ROUND_UP);
-        if (init_converted_samples(&converted_input_samples, output_codec_context,
-                                   out_samples))
-            goto cleanup;
-
-        /**
-         * Convert the input samples to the desired output sample format.
-         * This requires a temporary storage provided by converted_input_samples.
-         */
-        int converted_size;
-        if ((converted_size = convert_samples((const uint8_t**)input_frame->extended_data, converted_input_samples,
-                            input_frame->nb_samples, out_samples, resampler_context)) < 0)
-            goto cleanup;
-
-        /** Add the converted input samples to the FIFO buffer for later processing. */
-        if (add_samples_to_fifo(fifo, converted_input_samples,
-                                converted_size))
+        if (convert_and_store(input_frame, fifo, input_codec_context, output_codec_context, resampler_context) < 0)
             goto cleanup;
         ret = 0;
     }
     ret = 0;
 
 cleanup:
-    if (converted_input_samples) {
-        av_freep(&converted_input_samples[0]);
-        free(converted_input_samples);
-    }
     av_frame_free(&input_frame);
 
     return ret;

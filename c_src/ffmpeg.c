@@ -130,13 +130,11 @@ void loop() {
              int got_packet;
              int nb_samples;
              const int output_frame_size = output_audio[0].ctx->frame_size;
-             /*int ret = 0;
-             do {
-                int finished = 0;
-                ret = decode_convert_and_store(fifo, &output_packet, input_audio.ctx, output_audio[0].ctx, resample_context, &finished) < 0;
-                if (ret < 0)                                                                                                                             ///What is it?
-                    error("failed to decode audio");
-             } while (ret > 0);    */
+             int ret = 0;
+             while ((ret = convert_and_store(NULL, fifo, input_audio.ctx, output_audio[0].ctx, resample_context)) > 0)
+             if (ret < 0) {
+                error("failed to flush swr buffer");
+             }
              while (av_audio_fifo_size(fifo) >= output_frame_size) {
                  init_packet(&output_packet);
                  if (load_and_encode(fifo, output_audio[0].ctx, &output_packet, &got_packet, &nb_samples) < 0)
@@ -159,8 +157,13 @@ void loop() {
                 }
                 av_free_packet(&output_packet);
              } while (got_packet);
+
+             av_audio_fifo_free(fifo);
+             swr_free(&resample_context);
+             avcodec_close(output_audio[0].ctx);
+             avcodec_close(input_audio.ctx);
         }
-        return;
+        return 0;
     }
     if(!strcmp(command, "init_input")) {
       if(arity != 4) error("Must provide 3 arguments to init_input command");

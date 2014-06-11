@@ -33,4 +33,10 @@ int load_and_encode(AVAudioFifo *fifo, AVCodecContext *output_codec_context, AVP
 
 int encode_audio_frame(AVFrame *frame, AVCodecContext *output_codec_context, AVPacket *output_packet, int *got_packet_ptr, int *nb_samples);
 
+int convert_and_store(AVFrame *input_frame,
+                        AVAudioFifo *fifo,
+                        AVCodecContext *input_codec_context,
+                        AVCodecContext *output_codec_context,
+                        SwrContext *resampler_context);
+
 #endif

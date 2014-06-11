@@ -84,15 +84,15 @@ handle_call({init_video, Codec, Config}, _From, #ffmpeg_worker{port = Port, vide
   Input = #init_input{content = video, codec = ev_to_av(Codec), config = Config},
   {reply, send_init(Port, Input, Output), State#ffmpeg_worker{video_input = Input}};
 
-handle_call(finish, _From, #ffmpeg_worker{port = Port} = State) ->
-  send(Port, {finish}),
-  {reply, ok, State};
-
 handle_call(_Request, _From, State) ->
   {reply, ok, State}.
 
 handle_cast({transcode, #video_frame{} = Frame}, #ffmpeg_worker{port = Port} = State) ->
   send_frame(Port, Frame),
+  {noreply, State};
+
+handle_cast(finish, #ffmpeg_worker{port = Port} = State) ->
+  send(Port, {finish}),
   {noreply, State};
 
 handle_cast(_Request, State) ->
@@ -133,7 +133,7 @@ transcode(Pid, Frame) ->
   gen_server:cast(Pid, {transcode, Frame}).
 
 finish(Pid) ->
-  gen_server:call(Pid, finish).
+  gen_server:cast(Pid, finish).
 
 transform_frame(#video_frame_ff{content = audio, pts = Pts, dts = Dts, codec = Codec, stream_id = Stream_id, flavor = keyframe, body = Body, next_id = Next_id}, #init_output{options = Options}) ->
   Bitrate = proplists:get_value(bitrate, Options),

@@ -1,4 +1,3 @@
-
 -module(ffmpeg_sup).
 
 -behaviour(supervisor).
@@ -8,9 +7,6 @@
 
 %% Supervisor callbacks
 -export([init/1]).
-
-%% Helper macro for declaring children of supervisor
--define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
 
 %% ===================================================================
 %% API functions
@@ -24,5 +20,12 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    {ok, { {one_for_one, 5, 10}, []} }.
+  Supervisors = [{ffmpeg_server,
+                  {ffmpeg_server, start_link, []},
+                  permanent,
+                  2000,
+                  worker,
+                  []
+                }],
+  {ok, {{one_for_one, 3, 10}, Supervisors}}.
 
